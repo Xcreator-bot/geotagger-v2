@@ -1,7 +1,8 @@
 /* Image GEO Tagger — core logic (built from scratch, v2)
  * 3-step flow: 1 Upload -> 2 Pick location -> 3 Tag & Download.
  * Same location for all (default) or a different location per image.
- * JPEGs get real GPS EXIF via piexifjs. PNG/WebP have no standard GPS
+ * JPEGs get real GPS EXIF via piexifjs, plus optional title / description /
+ * keywords metadata written into the same EXIF. PNG/WebP have no standard GPS
  * EXIF, so they download unchanged. Everything runs in the browser;
  * photos never leave the device.
  */
@@ -11,7 +12,7 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-  var images = [];          // { id, file, name, type, size, objectUrl, tagged, taggedBlob, taggedName, exifApplied, taggedNote, existingGps, gpsAction, location }
+  var images = [];          // { id, file, name, type, size, objectUrl, tagged, taggedBlob, taggedName, exifApplied, taggedNote, taggedMeta, existingGps, gpsAction, location }
   var selected = new Set();
   var location = null;      // global { lat, lng, place }
   var mode = 'same';        // 'same' | 'per'
@@ -295,8 +296,61 @@
     });
   }
 
+  /* ---------- Metadata (title / description / keywords) ---------- */
+  function isAscii(str) { return /^[\x00-\x7F]*$/.test(str); }
+
+  function encodeUtf16Le(str) {
+    var bytes = [];
+    for (var i = 0; i < str.length; i++) {
+      var code = str.charCodeAt(i);
+      bytes.push(code & 0xFF, (code >> 8) & 0xFF);
+    }
+    bytes.push(0, 0); // null terminator
+    return bytes;
+  }
+
+  function parseKeywords(raw) {
+    return raw.split(',').map(function (k) { return k.trim(); }).filter(function (k) { return k.length > 0; });
+  }
+
+  function getMetadata() {
+    return {
+      title: $('metaTitle').value.trim(),
+      description: $('metaDesc').value.trim(),
+      keywords: parseKeywords($('metaKeywords').value)
+    };
+  }
+
+  function metadataIsEmpty(meta) {
+    return !meta.title && !meta.description && !meta.keywords.length;
+  }
+
+  /* Writes only the fields the user filled in; an empty field leaves any
+   * existing value in the photo untouched (never blanks metadata out).
+   * ASCII-only tags (DocumentName, ImageDescription, UserComment) are
+   * skipped for non-ASCII text — the UTF-16LE XP tags carry those.
+   * Mapping: Title -> XPTitle + DocumentName; Description ->
+   * ImageDescription + XPComment + UserComment; Keywords -> XPKeywords
+   * (comma-separated input becomes semicolon-separated). */
+  function applyMetadata(exifObj, meta) {
+    if (meta.title) {
+      exifObj['0th'][piexif.ImageIFD.XPTitle] = encodeUtf16Le(meta.title);
+      if (isAscii(meta.title)) exifObj['0th'][piexif.ImageIFD.DocumentName] = meta.title;
+    }
+    if (meta.description) {
+      exifObj['0th'][piexif.ImageIFD.XPComment] = encodeUtf16Le(meta.description);
+      if (isAscii(meta.description)) {
+        exifObj['0th'][piexif.ImageIFD.ImageDescription] = meta.description;
+        exifObj.Exif[piexif.ExifIFD.UserComment] = 'ASCII\0\0\0' + meta.description;
+      }
+    }
+    if (meta.keywords.length) {
+      exifObj['0th'][piexif.ImageIFD.XPKeywords] = encodeUtf16Le(meta.keywords.join('; '));
+    }
+  }
+
   /* ---------- Tagging ---------- */
-  function embedGps(dataUrl, lat, lng) {
+  function embedGps(dataUrl, lat, lng, meta) {
     var exifObj;
     try { exifObj = piexif.load(dataUrl); }
     catch (e) { exifObj = { '0th': {}, Exif: {}, GPS: {}, '1st': {}, thumbnail: null }; }
@@ -304,6 +358,7 @@
     exifObj.GPS[piexif.GPSIFD.GPSLatitude] = degToDmsRational(lat);
     exifObj.GPS[piexif.GPSIFD.GPSLongitudeRef] = lng >= 0 ? 'E' : 'W';
     exifObj.GPS[piexif.GPSIFD.GPSLongitude] = degToDmsRational(lng);
+    if (meta) applyMetadata(exifObj, meta);
     return piexif.insert(piexif.dump(exifObj), dataUrl);
   }
 
@@ -336,6 +391,7 @@
       return;
     }
     var targets = images.filter(function (img) { return selected.has(img.id); });
+    var meta = getMetadata(); // metadata inputs stay filled after tagging, so bulk tagging repeats easily
     var done = 0, skipped = 0, nonJpeg = 0, results = [];
     setBusy(true);
     for (var i = 0; i < targets.length; i++) {
@@ -349,21 +405,25 @@
           } else { img.taggedBlob = img.file; }
           img.exifApplied = false;
           img.taggedNote = 'GPS removed';
+          img.taggedMeta = null; // file passes through otherwise unchanged — no metadata written
         } else if (img.gpsAction === 'keep' && img.existingGps) {
           img.taggedBlob = img.file;
           img.exifApplied = false;
           img.taggedNote = 'Kept existing GPS ' + coordsText(img.existingGps.lat, img.existingGps.lng);
+          img.taggedMeta = null; // file passes through unchanged — no metadata written
         } else {
           var loc = mode === 'per' ? img.location : location;
           if (!loc) { skipped++; continue; }
           if (isJpeg) {
-            img.taggedBlob = dataUrlToBlob(embedGps(await readFileAsDataUrl(img.file), loc.lat, loc.lng));
+            img.taggedBlob = dataUrlToBlob(embedGps(await readFileAsDataUrl(img.file), loc.lat, loc.lng, meta));
             img.exifApplied = true;
             img.taggedNote = 'GPS ' + coordsText(loc.lat, loc.lng);
+            img.taggedMeta = metadataIsEmpty(meta) ? null : meta;
           } else {
             img.taggedBlob = img.file;
             img.exifApplied = false;
-            img.taggedNote = 'PNG/WebP — GPS not embedded';
+            img.taggedNote = 'PNG/WebP — GPS & metadata not embedded';
+            img.taggedMeta = null;
             nonJpeg++;
           }
         }
@@ -382,7 +442,7 @@
     renderResults(results);
     if (done) showToast(done + ' image(s) tagged.', 'success');
     if (skipped) showToast(skipped + ' image(s) skipped — no location set for them. In "Different per image" mode, tap a photo then tap the map.', 'error');
-    if (nonJpeg) showToast('Note: GPS EXIF was applied only to JPEGs. ' + nonJpeg + ' PNG/WebP file(s) will download unchanged, as GPS EXIF is not standard for those formats.', 'error');
+    if (nonJpeg) showToast('Note: GPS EXIF and metadata were applied only to JPEGs. ' + nonJpeg + ' PNG/WebP file(s) will download unchanged, as GPS EXIF is not standard for those formats.', 'error');
   }
 
   function renderResults(results) {
@@ -390,6 +450,20 @@
     if (!results.length) { section.hidden = true; return; }
     section.hidden = false;
     $('resultsSummary').textContent = results.length + ' tagged. Files are named with a _tagged suffix.';
+    var oldMeta = section.querySelector('.results-meta');
+    if (oldMeta) oldMeta.remove();
+    var withMeta = results.filter(function (img) { return img.taggedMeta; });
+    if (withMeta.length) {
+      var m = withMeta[0].taggedMeta;
+      var parts = [];
+      if (m.title) parts.push('Title: "' + m.title + '"');
+      if (m.description) parts.push('Description: "' + m.description + '"');
+      if (m.keywords.length) parts.push('Keywords: ' + m.keywords.join(', '));
+      var metaLine = document.createElement('p');
+      metaLine.className = 'hint results-meta';
+      metaLine.textContent = '✏️ Metadata written: ' + parts.join(' • ');
+      section.insertBefore(metaLine, $('resultsList'));
+    }
     var list = $('resultsList');
     list.innerHTML = '';
     results.forEach(function (img) {

@@ -122,10 +122,11 @@ body {
 .recent-chip:hover { border-color: var(--accent); }
 
 /* Forms / buttons */
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], textarea {
   width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--panel-border);
   background: rgba(0, 0, 0, 0.35); color: var(--text); font-size: 1rem;
 }
+textarea { resize: vertical; font-family: inherit; }
 input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .field-group { margin-bottom: 16px; }
 .field-group label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: var(--muted); }

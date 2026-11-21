@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image GEO Tagger - Tag Your Photos with GPS Coordinates</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Image GEO Tagger</h1>
+    <p>Tag Your Photos with GPS Coordinates</p>
+    <p class="privacy-note">🔒 Your photos never leave your device — everything runs in your browser.</p>
+
+    <ol class="steps" aria-label="How it works">
+      <li id="step1" class="step active">
+        <span class="step-num">1</span>
+        <span class="step-text"><strong>Upload</strong><small>Add your photos</small></span>
+      </li>
+      <li id="step2" class="step locked">
+        <span class="step-num">2</span>
+        <span class="step-text"><strong>Pick location</strong><small>Search or click the map</small></span>
+      </li>
+      <li id="step3" class="step locked">
+        <span class="step-num">3</span>
+        <span class="step-text"><strong>Tag &amp; Download</strong><small>One click, then save</small></span>
+      </li>
+    </ol>
+  </header>
+
+  <main class="layout">
+    <!-- Left: Images -->
+    <section class="panel panel-images" aria-label="Images">
+      <h2>Images <span id="imageCount">(0)</span></h2>
+
+      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload images">
+        <p class="drop-icon">📷</p>
+        <p><strong>Drag &amp; drop photos here</strong><br>or tap to browse</p>
+        <p class="formats">JPEG &bull; PNG &bull; WebP</p>
+        <button type="button" id="uploadBtn" class="btn btn-primary">Upload images</button>
+        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+      </div>
+
+      <p class="warn" id="pngWarning" hidden>⚠️ GPS tagging works fully for JPEG. PNG / WebP files download unchanged — GPS EXIF is not standard for those formats.</p>
+
+      <div class="gallery-actions">
+        <button type="button" id="selectAllBtn" class="btn btn-ghost">Select All</button>
+        <button type="button" id="deselectAllBtn" class="btn btn-ghost">Deselect All</button>
+        <button type="button" id="clearAllBtn" class="btn btn-ghost">Clear All</button>
+      </div>
+
+      <div id="gallery" class="gallery" aria-live="polite">
+        <p class="empty-note" id="emptyNote">No photos yet — upload some to start Step 1.</p>
+      </div>
+    </section>
+
+    <!-- Centre: Map -->
+    <section class="panel panel-map" aria-label="Map">
+      <div class="map-search">
+        <input type="text" id="searchInput" placeholder="Search a place…" aria-label="Search a place">
+        <button type="button" id="searchBtn" class="btn btn-primary">Go</button>
+        <button type="button" id="myLocationBtn" class="btn btn-secondary" title="Use my current location">📍 My location</button>
+      </div>
+      <div id="map" aria-label="Map — click to select a location"></div>
+      <p class="coords">Lat: <span id="latDisplay">—</span> | Lng: <span id="lngDisplay">—</span></p>
+      <p class="place" id="placeName">Click the map or search a place to pick a location.</p>
+      <div class="recent" id="recentWrap" hidden>
+        <span class="recent-label">Recent:</span>
+        <span id="recentList" class="recent-list"></span>
+      </div>
+    </section>
+
+    <!-- Right: Details & Actions -->
+    <section class="panel panel-actions" aria-label="Details and actions">
+      <h2>Details &amp; Actions</h2>
+      <p class="empty-actions" id="actionsEmpty">Upload photos, then pick a location — I'll guide you at each step.</p>
+
+      <div class="field-group">
+        <h3>Location mode</h3>
+        <div class="mode-toggle" role="group" aria-label="Location mode">
+          <button type="button" id="modeSameBtn" class="btn btn-secondary mode-btn active" aria-pressed="true">Same for all</button>
+          <button type="button" id="modePerBtn" class="btn btn-secondary mode-btn" aria-pressed="false">Different per image</button>
+        </div>
+        <p class="hint" id="modeHint">One location is applied to every selected photo.</p>
+      </div>
+
+      <div class="field-group">
+        <h3>Selection</h3>
+        <p id="selectionInfo">No images selected</p>
+      </div>
+
+      <div class="field-group" id="existingGpsBox" hidden>
+        <h3>Existing GPS</h3>
+        <p id="existingGpsText"></p>
+        <div class="gps-actions">
+          <button type="button" id="gpsKeepBtn" class="btn btn-ghost">Keep</button>
+          <button type="button" id="gpsReplaceBtn" class="btn btn-ghost">Replace</button>
+          <button type="button" id="gpsRemoveBtn" class="btn btn-ghost">Remove GPS</button>
+        </div>
+        <p class="hint">Keep = leave the old GPS as it is. Replace = overwrite with the new location. Remove = strip GPS from the file.</p>
+      </div>
+
+      <div class="field-group">
+        <h3>Tagged Location</h3>
+        <label>
+          Latitude
+          <input type="number" id="latInput" step="any" min="-90" max="90" placeholder="0.000000">
+        </label>
+        <label>
+          Longitude
+          <input type="number" id="lngInput" step="any" min="-180" max="180" placeholder="0.000000">
+        </label>
+        <div class="row-btns">
+          <button type="button" id="setOnMapBtn" class="btn btn-secondary">Set on Map</button>
+          <button type="button" id="copyCoordsBtn" class="btn btn-secondary">Copy coordinates</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" id="tagBtn" class="btn btn-primary btn-big" disabled>Tag Selected Images</button>
+        <p class="btn-hint" id="tagHint">Upload photos first.</p>
+        <button type="button" id="downloadTaggedBtn" class="btn btn-secondary" disabled>Download Tagged</button>
+        <p class="btn-hint" id="downloadHint">Tag some photos first.</p>
+        <button type="button" id="downloadZipBtn" class="btn btn-secondary" disabled>Download All as ZIP</button>
+        <p class="btn-hint" id="zipHint">Tag some photos first.</p>
+        <button type="button" id="downloadCsvBtn" class="btn btn-ghost" disabled>Download CSV list</button>
+        <p class="btn-hint" id="csvHint">Tag some photos first.</p>
+      </div>
+
+      <div class="progress" id="progressWrap" hidden>
+        <p id="progressText">Working…</p>
+        <div class="progress-bar"><div id="progressFill"></div></div>
+      </div>
+
+      <div id="resultsSection" hidden>
+        <h3>✅ Results</h3>
+        <p id="resultsSummary"></p>
+        <ul id="resultsList" class="results-list"></ul>
+      </div>
+    </section>
+  </main>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
